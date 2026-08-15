@@ -1,5 +1,47 @@
 # Eta
 
+> [!IMPORTANT]
+> ## 本分支说明(基于上游 v2.6.0 的增强分支)
+>
+> 本仓库是 [Mangi-11/Eta](https://github.com/Mangi-11/Eta)(作者:蛮吉)的**增强分支**,不是简单的克隆。以下是在上游基础上做的修改:
+>
+> ### 新增功能
+>
+> | 功能 | 说明 | 截图 |
+> |---|---|---|
+> | 顶部模型切换器 | 首页顶栏显示当前模型名,点击下拉直接切换同一提供商的模型,不用进设置 | [查看](https://github.com/xkxxs/Eta/raw/issue-images/02_model_switcher.jpg) |
+> | 上下文用量环 | 输入框旁环形显示本轮 context 占用(tokens/窗口上限),超过 90% 变红 | [查看](https://github.com/xkxxs/Eta/raw/issue-images/01_chat_with_reply.jpg) |
+> | 上下文自动裁剪 | 上下文超过窗口阈值时,请求前自动裁剪早期消息(保留最近 user 与 system);阈值可在设置中调 30%~90%(默认 60%) | [查看](https://github.com/xkxxs/Eta/raw/issue-images/04_settings_trim.jpg) |
+> | 模型 context 显示与编辑 | 模型列表显示每个模型的 context 大小;编辑弹窗可改上下文长度与思考模式等级(7 档多选,不勾选=全部可选) | [查看](https://github.com/xkxxs/Eta/raw/issue-images/06_provider_models.jpg) |
+> | 自定义供应商思考等级回退 | 自定义提供商的未知模型自动获得可关闭的通用思考等级(low~max),思考开关开箱即用 | - |
+> | 远端刷新保留手动 contextWindow | `/models` 刷新不再覆盖手动设置的上下文长度 | - |
+> | Responses 协议兼容 | 上游终态缺 output 时用流式内容补全(与上游 main 的修复等价,本分支已跟随上游) | - |
+>
+> ### 环境适配(仅本分支)
+>
+> - minSdk 34 → 33,Java 25 → 21(适配 **Android 13 / ColorOS / OnePlus** 设备,使用 JDK 21 构建)
+> - `AndroidManifest.xml` 增加 `configChanges`,防止旋转屏幕时流式内容丢失
+>
+> ### 构建方法
+>
+> 构建环境:Termux + proot-distro(ubuntu-build),JDK 21,`ANDROID_HOME` 指向本地 SDK。签名通过环境变量注入:
+>
+> ```bash
+> export ETA_RELEASE_STORE_FILE=<keystore 路径>
+> export ETA_RELEASE_STORE_PASSWORD=<密码>
+> export ETA_RELEASE_KEY_ALIAS=<别名>
+> export ETA_RELEASE_KEY_PASSWORD=<密码>
+> gradle assembleRelease
+> ```
+>
+> ### 分支与产物
+>
+> - `main`:上游 v2.6.0 + 上述全部修改(即本分支增强版)
+> - `issue-images`:本 README 与 issue 引用的功能截图
+> - 测试 APK 下载:[GitHub Releases](https://github.com/xkxxs/Eta/releases/tag/pr-apk-20260815)(dev keystore 签名,供测试)
+>
+> 功能建议也已反馈至上游:[Mangi-11/Eta#54](https://github.com/Mangi-11/Eta/issues/54)
+
 **简体中文** | [English](README_EN.md)
 
 <p><img src="https://img.shields.io/badge/Kotlin-2.4.0-7F52FF?logo=kotlin&amp;logoColor=white" alt="Kotlin 2.4.0"> <img src="https://img.shields.io/badge/AGP-9.3.1-3DDC84?logo=android&amp;logoColor=white" alt="AGP 9.3.1"> <img src="https://img.shields.io/badge/minSdk-34-3DDC84?logo=android&amp;logoColor=white" alt="minSdk 34"> <img src="https://img.shields.io/badge/Assistant%20Integrations-ColorOS%20%26%20HyperOS-1677FF" alt="Assistant integrations for ColorOS and HyperOS"></p>
