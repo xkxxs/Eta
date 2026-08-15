@@ -48,9 +48,11 @@ import fuck.andes.FuckAndesApp
 import fuck.andes.data.model.AnthropicProviderSetting
 import fuck.andes.data.model.CustomProviderSetting
 import fuck.andes.data.model.Model
+import fuck.andes.data.model.ModelReasoningCapabilities
 import fuck.andes.data.model.OpenAiCompatibleProviderSetting
 import fuck.andes.data.model.OpenAiEndpointMode
 import fuck.andes.data.model.ProviderSetting
+import fuck.andes.data.model.ReasoningEffort
 import fuck.andes.data.model.withId
 import fuck.andes.data.repository.ModelRepository
 import fuck.andes.data.repository.ProviderRepository
@@ -998,6 +1000,13 @@ private fun ModelListItem(
                 enabled = enabled,
             )
         } else {
+            IconButton(onClick = onEdit, enabled = enabled) {
+                Icon(
+                    painter = painterResource(LucideR.drawable.lucide_ic_settings_2),
+                    contentDescription = "编辑模型能力",
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                )
+            }
             IconButton(onClick = onSetCurrent, enabled = enabled) {
                 Icon(
                     painter = painterResource(if (isSelected) LucideR.drawable.lucide_ic_check else LucideR.drawable.lucide_ic_circle),
@@ -1021,10 +1030,32 @@ private fun ModelEditDialog(
 ) {
     var displayName by remember(model.id, isNew) { mutableStateOf(model.displayName) }
     var modelId by remember(model.id, isNew) { mutableStateOf(model.modelId) }
+    var contextWindowInput by remember(model.id, isNew) {
+        mutableStateOf(model.contextWindow?.toString().orEmpty())
+    }
+    var selectedEfforts by remember(model.id, isNew) {
+        mutableStateOf(
+            model.reasoningCapabilities
+                ?.supportedEfforts
+                ?.toSet()
+                .orEmpty()
+        )
+    }
 
     fun updated(): Model = model.copy(
         displayName = displayName.trim(),
         modelId = modelId.trim(),
+        contextWindow = contextWindowInput.trim().toIntOrNull()?.takeIf { it > 0 },
+        reasoningCapabilities = if (selectedEfforts.isEmpty()) {
+            null
+        } else {
+            ModelReasoningCapabilities(
+                supportedEfforts = ReasoningEffort.entries
+                    .filter { it in selectedEfforts && it != ReasoningEffort.OFF && it != ReasoningEffort.DEFAULT }
+                    .sortedBy(ReasoningEffort::rank),
+                canDisable = true,
+            )
+        },
     )
 
     OverlayDialog(
@@ -1049,10 +1080,70 @@ private fun ModelEditDialog(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Next,
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            TextField(
+                value = contextWindowInput,
+                onValueChange = { contextWindowInput = it.filter(Char::isDigit) },
+                label = "上下文长度 (tokens)",
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
                     imeAction = ImeAction.Done,
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
+            Text(
+                text = "留空则不限制/由 API 决定",
+                style = MiuixTheme.textStyles.footnote2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "思考模式等级",
+                style = MiuixTheme.textStyles.body1,
+            )
+            Text(
+                text = "勾选允许使用的等级；不勾选默认全部可选",
+                style = MiuixTheme.textStyles.footnote2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            ReasoningEffort.entries.forEach { effort ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isSaving) {
+                            selectedEfforts = if (effort in selectedEfforts) {
+                                selectedEfforts - effort
+                            } else {
+                                selectedEfforts + effort
+                            }
+                        }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        state = if (effort in selectedEfforts) ToggleableState.On else ToggleableState.Off,
+                        onClick = {
+                            selectedEfforts = if (effort in selectedEfforts) {
+                                selectedEfforts - effort
+                            } else {
+                                selectedEfforts + effort
+                            }
+                        },
+                        enabled = !isSaving,
+                    )
+                    Text(
+                        text = effort.displayName,
+                        style = MiuixTheme.textStyles.body2,
+                    )
+                }
+            }
             // 能力标签与列表项展示保持一致，来源细节不暴露给用户
             Row(
                 modifier = Modifier.padding(top = 12.dp),

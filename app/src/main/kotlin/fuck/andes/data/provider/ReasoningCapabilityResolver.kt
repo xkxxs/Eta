@@ -22,7 +22,18 @@ internal object ReasoningCapabilityResolver {
         if (model.reasoning == false) return null
         model.reasoningCapabilities?.let { return it }
         if (model.reasoning != true) {
-            return if (inferExactCatalogModel) catalogCapabilities(sourceType, model.modelId) else null
+            if (inferExactCatalogModel) {
+                catalogCapabilities(sourceType, model.modelId)?.let { return it }
+            }
+            // 自定义供应商未知模型：给出可关闭的通用思考等级，保证思考开关可用。
+            if (sourceType == ProviderSourceTypes.CUSTOM) {
+                return capabilities(
+                    supported = lowToMax,
+                    canDisable = true,
+                    defaultEffort = ReasoningEffort.MEDIUM,
+                )
+            }
+            return null
         }
         return catalogCapabilities(sourceType, model.modelId)
             ?: familyCapabilities(sourceType, model.modelId)

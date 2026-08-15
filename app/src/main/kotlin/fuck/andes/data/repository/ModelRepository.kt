@@ -116,6 +116,8 @@ internal object ModelRepository {
                                     displayName = remote.displayName.trim().ifBlank { remote.modelId.trim() },
                                     isEnabled = stored.isEnabled,
                                     isBuiltIn = stored.isBuiltIn || remote.isBuiltIn,
+                                    // 远端 /models 通常不返回 contextWindow，保留本地手动设置的值
+                                    contextWindow = remote.contextWindow ?: stored.contextWindow,
                                     customHeaders = stored.customHeaders,
                                     customBody = stored.customBody,
                                     source = stored.source,
