@@ -16,6 +16,9 @@ import fuck.andes.ui.model.AgentChatUiState
 internal fun AgentChatScreen(
     state: AgentChatUiState,
     conversationKey: String?,
+    contextUsageTokens: Int?,
+    contextWindowTokens: Int?,
+    contextJustTrimmed: Boolean,
     onAction: (AgentChatAction) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -29,6 +32,9 @@ internal fun AgentChatScreen(
             pendingImages = state.pendingImages,
             pendingFileReferences = state.pendingFileReferences,
             messageEdit = state.messageEdit,
+            contextUsageTokens = contextUsageTokens,
+            contextWindowTokens = contextWindowTokens,
+            contextJustTrimmed = contextJustTrimmed,
             onReasoningEffortChange = { onAction(AgentChatAction.ReasoningEffortChanged(it)) },
             onSubmit = { text -> onAction(AgentChatAction.SubmitMessage(text)) },
             onStop = { onAction(AgentChatAction.StopRun) },

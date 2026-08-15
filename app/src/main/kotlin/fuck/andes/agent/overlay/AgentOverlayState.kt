@@ -139,6 +139,7 @@ internal fun AgentOverlayState.applyEvent(event: AgentEvent): AgentOverlayState 
         statusText = "调用失败",
         detailText = event.reason,
     )
+    is AgentEvent.ContextTrimmed -> this
 }
 
 /**

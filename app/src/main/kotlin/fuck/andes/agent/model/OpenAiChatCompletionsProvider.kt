@@ -51,7 +51,7 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
             .also { CustomHeaderFilter.mergeInto(it, config.customHeaders) }
             .build()
 
-        val requestBody = buildRequestJson(config, request.messages, request.tools)
+        val requestBody = buildRequestJson(config, request.messages, request.tools, onEvent)
             .toString()
             .toRequestBody(JSON_MEDIA_TYPE)
 
@@ -94,7 +94,8 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
     private fun buildRequestJson(
         config: AgentModelClient.ModelConfig,
         messages: JSONArray,
-        tools: JSONArray
+        tools: JSONArray,
+        onEvent: (ProviderEvent) -> Unit
     ): JSONObject {
         val sourceType = ProviderSourceRegistry.resolve(
             providerId = config.providerId,
@@ -102,6 +103,7 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
             baseUrl = config.baseUrl,
             providerType = config.providerType,
         )
+        trimContextIfNeeded(config, messages, onEvent)
         return JSONObject()
             .put("model", config.model)
             .put("stream", true)
@@ -116,6 +118,60 @@ internal object OpenAiChatCompletionsProvider : AgentProviderClient {
                 RequestBodyMerge.mergeCustomBody(request, config.customBody)
                 ProviderReasoning.applyOpenAiCompatibleRequest(request, config)
             }
+    }
+
+    /** 上下文裁剪：估算超预算时删除最早消息（保留最后一条 user 与 system）。 */
+    private fun trimContextIfNeeded(
+        config: AgentModelClient.ModelConfig,
+        messages: JSONArray,
+        onEvent: (ProviderEvent) -> Unit,
+    ) {
+        val window = config.contextWindow ?: return
+        if (window <= 0) return
+        val budget = window * config.contextTrimPercent / 100
+        if (budget <= 0) return
+        val total = messages.length()
+        if (total <= 0) return
+        var lastUser = -1
+        for (i in 0 until total) {
+            val role = messages.optJSONObject(i)?.optString("role")
+            if (role == "user") lastUser = i
+        }
+        if (lastUser < 0) return
+        var cut = -1
+        var accumulated = 0
+        for (i in total - 1 downTo 0) {
+            accumulated += messages.optJSONObject(i)?.toString()?.length?.div(3) ?: 0
+            if (accumulated > budget) {
+                cut = i
+                break
+            }
+        }
+        if (cut < 0) return
+        var userBoundary = -1
+        for (i in cut until total) {
+            val role = messages.optJSONObject(i)?.optString("role")
+            if (role == "user") {
+                userBoundary = i
+                break
+            }
+        }
+        if (userBoundary >= 0) cut = userBoundary else cut = lastUser
+        var removed = 0
+        var i = 0
+        while (i < cut) {
+            val role = messages.optJSONObject(i)?.optString("role")
+            if (role == "system") {
+                i++
+                continue
+            }
+            messages.remove(i)
+            removed++
+            cut--
+        }
+        if (removed > 0) {
+            onEvent(ProviderEvent.ContextTrimmed(droppedMessages = removed))
+        }
     }
 
     private fun readStreamingAssistantMessage(

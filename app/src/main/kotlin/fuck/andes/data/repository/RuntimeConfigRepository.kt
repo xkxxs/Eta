@@ -91,6 +91,10 @@ internal object RuntimeConfigRepository {
             is CustomProviderSetting -> provider.endpointMode
             is AnthropicProviderSetting -> ""
         }
+        val finalTrimPercent = (Prefs.localAgentPreferences()
+            ?.getInt(Prefs.Keys.AGENT_CONTEXT_TRIM_PERCENT, DEFAULT_CONTEXT_TRIM_PERCENT)
+            ?: DEFAULT_CONTEXT_TRIM_PERCENT)
+            .coerceIn(MIN_CONTEXT_TRIM_PERCENT, MAX_CONTEXT_TRIM_PERCENT)
         val inferOpenAiCatalog = sourceType == fuck.andes.data.model.ProviderSourceTypes.CUSTOM &&
             endpointMode == OpenAiEndpointMode.RESPONSES
         val reasoningCapabilities = ReasoningCapabilityResolver.resolve(
@@ -112,6 +116,7 @@ internal object RuntimeConfigRepository {
             model = model.modelId.trim(),
             modelDisplayName = model.displayName.trim(),
             contextWindow = model.contextWindow,
+            contextTrimPercent = finalTrimPercent,
             systemPrompt = systemPrompt,
             anthropicVersion = (provider as? AnthropicProviderSetting)?.anthropicVersion
                 ?: AnthropicProviderSetting.DEFAULT_ANTHROPIC_VERSION,
@@ -142,4 +147,8 @@ internal object RuntimeConfigRepository {
                 .remove(Prefs.Keys.AGENT_RUNTIME_CONFIG_JSON)
                 .commit()
         }.getOrDefault(false)
+
+    private const val DEFAULT_CONTEXT_TRIM_PERCENT = 60
+    private const val MIN_CONTEXT_TRIM_PERCENT = 30
+    private const val MAX_CONTEXT_TRIM_PERCENT = 90
 }

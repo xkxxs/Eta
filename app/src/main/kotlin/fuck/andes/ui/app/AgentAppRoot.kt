@@ -153,11 +153,14 @@ fun AgentAppRoot(
             isCurrentRoute = backStack.lastOrNull() == route,
             conversationPaneState = agentState.conversationPaneState,
             isConversationPaneOpen = conversationPaneOpen,
+            currentModelName = agentState.currentModelName,
+            currentProviderModels = agentState.currentProviderModels,
             onBack = { popRoute() },
             onOpenConversationPane = { conversationPaneOpen = true },
             onDismissConversationPane = { conversationPaneOpen = false },
             onSearchConversations = { query -> agentState.updateSearchQuery(query) },
             onNewConversation = { createConversation() },
+            onSwitchModel = { modelId -> agentState.switchModel(modelId) },
             onSelectConversation = { conversationId -> selectConversation(conversationId) },
             onConversationRename = { conversation ->
                 conversationRenameTarget = conversation
@@ -188,6 +191,9 @@ fun AgentAppRoot(
                     AgentHomeScreen(
                         state = agentState.homeState,
                         conversationKey = agentState.conversationPaneState.selectedConversationId,
+                        contextUsageTokens = agentState.contextUsageTokens,
+                        contextWindowTokens = agentState.contextWindowTokens,
+                        contextJustTrimmed = agentState.contextJustTrimmed,
                         onAction = { action ->
                             when (action) {
                                 is AgentHomeAction.ReasoningEffortChanged ->
@@ -234,6 +240,9 @@ fun AgentAppRoot(
                     AgentChatScreen(
                         state = agentState.homeState,
                         conversationKey = agentState.conversationPaneState.selectedConversationId,
+                        contextUsageTokens = agentState.contextUsageTokens,
+                        contextWindowTokens = agentState.contextWindowTokens,
+                        contextJustTrimmed = agentState.contextJustTrimmed,
                         onAction = { action ->
                             when (action) {
                                 AgentChatAction.NavigateBack -> popRoute()

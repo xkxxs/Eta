@@ -44,6 +44,8 @@ internal object Prefs {
         const val AGENT_DEVICE_SENSITIVE_ACTION_TOOLS = "agent_device_sensitive_action_tools"
         const val AGENT_THINKING_ENABLED = "agent_thinking_enabled"
         const val AGENT_RUNTIME_CONFIG_JSON = "agent_runtime_config_json"
+        /** 上下文裁剪阈值（占 context_window 的百分比，30-90，默认 60）。 */
+        const val AGENT_CONTEXT_TRIM_PERCENT = "agent_context_trim_percent"
 
         /** 全部布尔开关及其默认值。 */
         val BOOLEAN_DEFAULTS: Map<String, Boolean> = mapOf(

@@ -582,6 +582,12 @@ internal object AgentRuntimeWire {
                 putTokenUsage(event.usage)
             }
 
+            is AgentEvent.ContextTrimmed -> {
+                putString(KEY_TYPE, "context_trimmed")
+                putInt("round", event.round)
+                putInt("dropped", event.droppedMessages)
+            }
+
             is AgentEvent.UserSupplementReceived -> {
                 putString(KEY_TYPE, "user_supplement_received")
                 putInt("index", event.index)
@@ -707,6 +713,11 @@ internal object AgentRuntimeWire {
         "usage_received" -> AgentEvent.UsageReceived(
             round = bundle.getInt("round"),
             usage = bundle.getTokenUsage(),
+        )
+
+        "context_trimmed" -> AgentEvent.ContextTrimmed(
+            round = bundle.getInt("round"),
+            droppedMessages = bundle.getInt("dropped"),
         )
 
         "user_supplement_received" -> AgentEvent.UserSupplementReceived(

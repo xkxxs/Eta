@@ -102,6 +102,11 @@ internal sealed interface ProviderEvent {
         val usage: AgentTokenUsage
     ) : ProviderEvent
 
+    /** 请求构造阶段发生了上下文裁剪。 */
+    data class ContextTrimmed(
+        val droppedMessages: Int,
+    ) : ProviderEvent
+
     data class HostedToolStarted(
         val id: String,
         val name: String,

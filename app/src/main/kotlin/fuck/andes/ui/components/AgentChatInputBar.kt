@@ -3,6 +3,10 @@ package fuck.andes.ui.components
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -10,6 +14,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,10 +49,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -61,6 +69,9 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.text.font.FontWeight
 import com.composables.icons.lucide.R as LucideR
 import fuck.andes.data.model.ReasoningEffort
 import fuck.andes.ui.model.PendingFileReferenceUi
@@ -97,6 +108,9 @@ fun AgentChatInputBar(
     pendingFileReferences: List<PendingFileReferenceUi>,
     isEditingMessage: Boolean,
     editHasLaterTurns: Boolean,
+    contextUsageTokens: Int?,
+    contextWindowTokens: Int?,
+    contextJustTrimmed: Boolean,
     onReasoningEffortChange: (ReasoningEffort) -> Unit,
     onSubmit: (String) -> Unit,
     onStop: () -> Unit,
@@ -289,6 +303,13 @@ fun AgentChatInputBar(
                                 onEffortChange = onReasoningEffortChange,
                             )
                         }
+
+                        ContextUsageRing(
+                            usageTokens = contextUsageTokens,
+                            windowTokens = contextWindowTokens,
+                            compressing = contextJustTrimmed,
+                            modifier = Modifier.padding(start = 6.dp),
+                        )
                     }
 
                     Spacer(modifier = Modifier.weight(1f))
@@ -515,4 +536,118 @@ private fun PendingImageStrip(
             }
         }
     }
+}
+
+/**
+ * 上下文占用圆环：常态显示占用百分比与窗口上限，压缩时切换为加载转圈动画。
+ */
+@Composable
+private fun ContextUsageRing(
+    usageTokens: Int?,
+    windowTokens: Int?,
+    compressing: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    if (usageTokens == null || windowTokens == null || windowTokens <= 0) return
+    val percent = (usageTokens.toFloat() / windowTokens.toFloat() * 100f)
+        .coerceIn(0f, 100f)
+    val windowLabel = formatContextWindowTokens(windowTokens)
+    val progressColor = if (percent >= 90f) {
+        Color(0xFFE53935)
+    } else {
+        MiuixTheme.colorScheme.primary
+    }
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val transition = rememberInfiniteTransition(label = "ctx_ring_spin")
+        val rotation by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1_100, easing = LinearEasing),
+            ),
+            label = "ctx_ring_rotation",
+        )
+        val ringSize = 18.dp
+        val strokeWidth = 2.dp
+        val trackColor = MiuixTheme.colorScheme.outline.copy(alpha = 0.35f)
+        Box(modifier = Modifier.size(ringSize)) {
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(if (compressing) Modifier.rotate(rotation) else Modifier),
+            ) {
+                val strokePx = strokeWidth.toPx()
+                val inset = strokePx / 2f
+                val arcSize = Size(size.width - strokePx, size.height - strokePx)
+                drawArc(
+                    color = trackColor,
+                    startAngle = 0f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = arcSize,
+                    style = Stroke(width = strokePx, cap = StrokeCap.Round),
+                )
+                if (compressing) {
+                    drawArc(
+                        color = progressColor,
+                        startAngle = -90f,
+                        sweepAngle = 290f,
+                        useCenter = false,
+                        topLeft = Offset(inset, inset),
+                        size = arcSize,
+                        style = Stroke(width = strokePx, cap = StrokeCap.Round),
+                    )
+                } else if (percent > 0f) {
+                    drawArc(
+                        color = progressColor,
+                        startAngle = -90f,
+                        sweepAngle = 360f * percent / 100f,
+                        useCenter = false,
+                        topLeft = Offset(inset, inset),
+                        size = arcSize,
+                        style = Stroke(width = strokePx, cap = StrokeCap.Round),
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.width(5.dp))
+
+        if (compressing) {
+            Text(
+                text = "压缩中",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                fontSize = 10.sp,
+            )
+        } else {
+            Text(
+                text = "${percent.roundToInt()}%",
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+
+        Spacer(modifier = Modifier.width(3.dp))
+
+        Text(
+            text = windowLabel,
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+            fontSize = 10.sp,
+        )
+    }
+}
+
+private fun formatContextWindowTokens(tokens: Int): String = when {
+    tokens >= 1_000_000 -> "%.1fM".format(tokens / 1_000_000f)
+    tokens >= 1_000 -> "${tokens / 1_000}K"
+    else -> tokens.toString()
 }

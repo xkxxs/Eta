@@ -250,6 +250,10 @@ internal fun SettingsScreen(
                         iconTint = ColorOSRoyalBlue,
                     )
                     PrefDivider()
+                    ContextTrimPercentPreference(
+                        prefs = agentPrefs,
+                    )
+                    PrefDivider()
                     ArrowPreference(
                         title = "记忆",
                         startAction = {
@@ -751,6 +755,55 @@ private fun PowerAssistantTargetDialog(
                     radioButtonLocation = RadioButtonLocation.End,
                     enabled = enabled,
                 )
+            }
+        }
+    }
+}
+
+// ── 上下文压缩阈值 ───────────────────────────────────────────────────────────
+
+private val CONTEXT_TRIM_OPTIONS = listOf(30, 40, 50, 60, 70, 80, 90)
+
+/**
+ * 上下文压缩阈值：估算上下文超过 context_window 的该百分比时，请求前裁剪早期消息。
+ */
+@Composable
+private fun ContextTrimPercentPreference(
+    prefs: SharedPreferences?,
+) {
+    val percent = prefs?.getInt(Prefs.Keys.AGENT_CONTEXT_TRIM_PERCENT, 60) ?: 60
+    var showDialog by remember { mutableStateOf(false) }
+    ArrowPreference(
+        title = "上下文压缩阈值",
+        summary = "上下文超过 ${percent}% 上限时压缩早期消息",
+        startAction = {
+            TintedIcon(
+                icon = LucideR.drawable.lucide_ic_settings_2,
+                tint = ColorOSRoyalBlue,
+            )
+        },
+        onClick = { showDialog = true },
+    )
+    if (showDialog) {
+        OverlayDialog(
+            show = showDialog,
+            title = "上下文压缩阈值",
+            onDismissRequest = { showDialog = false },
+        ) {
+            Card {
+                CONTEXT_TRIM_OPTIONS.forEach { option ->
+                    RadioButtonPreference(
+                        title = "$option%",
+                        selected = percent == option,
+                        onClick = {
+                            prefs?.edit()
+                                ?.putInt(Prefs.Keys.AGENT_CONTEXT_TRIM_PERCENT, option)
+                                ?.commit()
+                            showDialog = false
+                        },
+                        radioButtonLocation = RadioButtonLocation.End,
+                    )
+                }
             }
         }
     }

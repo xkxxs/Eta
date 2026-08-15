@@ -100,6 +100,15 @@ internal sealed interface AgentEvent {
             "usage_received round=$round, ctx=${usage.contextTokens}, in=${usage.inputTokens}, out=${usage.outputTokens}, reasoning=${usage.reasoningTokens}, cache=${usage.cachedTokens}"
     }
 
+    /** 本轮请求构造时裁剪了早期消息。 */
+    data class ContextTrimmed(
+        val round: Int,
+        val droppedMessages: Int,
+    ) : AgentEvent {
+        override fun toLogLine(): String =
+            "context_trimmed round=$round, dropped=$droppedMessages"
+    }
+
     data class UserSupplementReceived(
         val index: Int,
         val text: String

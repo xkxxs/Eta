@@ -35,6 +35,7 @@ import fuck.andes.core.AndroidAgentLogger
 import fuck.andes.core.safeLogType
 import fuck.andes.data.model.ModelReasoningCapabilities
 import fuck.andes.data.model.ReasoningEffort
+import fuck.andes.data.model.selectedOrFirstModel
 import fuck.andes.data.repository.AgentMemoryRepository
 import fuck.andes.data.repository.ProviderRepository
 import fuck.andes.data.repository.RuntimeConfigRepository
@@ -79,6 +80,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** 顶部栏模型切换器条目。 */
+data class ModelSwitcherItem(
+    val id: String,
+    val displayName: String,
+)
 
 internal class AgentAppState(
     context: Context,
@@ -138,6 +145,26 @@ internal class AgentAppState(
     var memoryState by mutableStateOf(AgentMemoryUiState())
         private set
 
+    /** 最近一轮 usage.inputTokens：模型实际收到的上下文 tokens。 */
+    var contextUsageTokens by mutableStateOf<Int?>(null)
+        private set
+
+    /** 当前模型 context_window 上限。 */
+    var contextWindowTokens by mutableStateOf<Int?>(null)
+        private set
+
+    /** 最近一轮请求发生了上下文裁剪（供圆环转圈动画使用）。 */
+    var contextJustTrimmed by mutableStateOf(false)
+        private set
+
+    /** 当前选中模型的显示名（顶部栏展示）。 */
+    var currentModelName by mutableStateOf<String?>(null)
+        private set
+
+    /** 当前提供商下可用的模型列表（顶部栏切换用）。 */
+    var currentProviderModels by mutableStateOf<List<ModelSwitcherItem>>(emptyList())
+        private set
+
     init {
         refreshConversationSummaries()
         observeReasoningCapabilities()
@@ -167,9 +194,24 @@ internal class AgentAppState(
                         ?.reasoningCapabilities
                     withContext(Dispatchers.Main) {
                         applyReasoningCapabilities(capabilities)
+                        refreshModelSwitcher()
                     }
                 }
         }
+    }
+
+    /** 刷新顶部栏模型名与同提供商模型列表（按当前选中 provider 聚合）。 */
+    private suspend fun refreshModelSwitcher() {
+        val settings = ProviderRepository.repairSelection()
+        val provider = settings.selectedProviderId
+            ?.let { ProviderRepository.providerById(it) }
+            ?: return
+        val selected = provider.selectedOrFirstModel(settings.selectedModelId) ?: return
+        currentModelName = selected.displayName.ifBlank { selected.modelId }
+        currentProviderModels = provider.models
+            .filter { it.isEnabled }
+            .sortedBy { it.sortOrder }
+            .map { ModelSwitcherItem(id = it.id, displayName = it.displayName.ifBlank { it.modelId }) }
     }
 
     private fun applyReasoningCapabilities(capabilities: ModelReasoningCapabilities?) {
@@ -802,6 +844,7 @@ internal class AgentAppState(
                 thinkingEnabled = permittedReasoningEffort.enablesReasoning,
                 reasoningEffort = permittedReasoningEffort,
             )
+            contextWindowTokens = config?.contextWindow
             if (config == null) {
                 withContext(Dispatchers.Main) {
                     applyRunResult(
@@ -1053,6 +1096,16 @@ internal class AgentAppState(
         runConversationIds.remove(runId)
         refreshConversationSummaries()
         persistConversations()
+    }
+
+    /** 顶部栏模型切换：切换到同一提供商下的其他模型。 */
+    fun switchModel(modelId: String) {
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                RuntimeConfigRepository.setSelectedModelId(modelId)
+                refreshModelSwitcher()
+            }
+        }
     }
 
     fun refreshPermissionHealth() {
@@ -1479,6 +1532,14 @@ internal class AgentAppState(
                 updateAssistantUsage(runId, event.round, event.usage.toUi())
             }
 
+            is AgentEvent.ContextTrimmed -> {
+                contextJustTrimmed = true
+                scope.launch(Dispatchers.Main) {
+                    delay(TRIM_ANIMATION_MILLIS)
+                    contextJustTrimmed = false
+                }
+            }
+
             is AgentEvent.UserSupplementReceived -> {
                 insertSupplementMessage(runId, event.index, event.text)
             }
@@ -1591,6 +1652,7 @@ internal class AgentAppState(
 
     private fun updateAssistantUsage(runId: String, round: Int, usage: TokenUsageUi) {
         if (usage.isEmpty) return
+        contextUsageTokens = usage.inputTokens ?: usage.contextTokens
         // 只补充 token 用量。不能触碰 isStreaming：Usage 事件紧跟在文本块结束之后，
         // 若把 isStreaming 改回 true，流式渲染会在流式/静态两种视图间反复切换，整段重渲染。
         updateMessages(runId) { messages ->
@@ -1872,6 +1934,8 @@ internal data class MessageRevisionImpact(
 
 private const val EXTERNAL_ARCHIVE_CONVERSATION_PREFIX = "archive-"
 
+/** 上下文裁剪后圆环转圈动画持续时间。 */
+private const val TRIM_ANIMATION_MILLIS = 2_500L
 private fun String.isReadOnlyExternalArchiveConversation(): Boolean =
     startsWith(EXTERNAL_ARCHIVE_CONVERSATION_PREFIX)
 
