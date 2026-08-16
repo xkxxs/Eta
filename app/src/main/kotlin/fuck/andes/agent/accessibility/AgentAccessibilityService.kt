@@ -355,7 +355,14 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     fun clickNode(snapshot: NodeSnapshot, index: Int): NodeActionResult =
-        withValidatedIndexedNode(snapshot, index) { indexed ->
+        withValidatedIndexedNode(
+            snapshot,
+            index,
+            staleFallback = { stale ->
+                // 窗口内容/活动窗口已变:点击降级为坐标点击,命中当前窗口同位置。
+                gestureTap(stale.bounds.centerX().toFloat(), stale.bounds.centerY().toFloat())
+            },
+        ) { indexed ->
             val node = indexed.node
             val actionable = indexed.clickTarget?.resolveFor(node)
             if (indexed.clickTarget != null && actionable == null) {
@@ -382,7 +389,17 @@ class AgentAccessibilityService : AccessibilityService() {
         snapshot: NodeSnapshot,
         index: Int,
         durationMs: Long,
-    ): NodeActionResult = withValidatedIndexedNode(snapshot, index) { indexed ->
+    ): NodeActionResult = withValidatedIndexedNode(
+        snapshot,
+        index,
+        staleFallback = { stale ->
+            gestureTap(
+                stale.bounds.centerX().toFloat(),
+                stale.bounds.centerY().toFloat(),
+                durationMs = durationMs.coerceIn(300L, 3_000L),
+            )
+        },
+    ) { indexed ->
         val node = indexed.node
         val actionable = indexed.longClickTarget?.resolveFor(node)
         if (indexed.longClickTarget != null && actionable == null) {
@@ -1488,16 +1505,22 @@ class AgentAccessibilityService : AccessibilityService() {
         block(indexed.node)
     }
 
-    private fun withValidatedIndexedNode(
+    private inline fun withValidatedIndexedNode(
         snapshot: NodeSnapshot,
         index: Int,
+        crossinline staleFallback: (IndexedNode) -> NodeActionResult? = { null },
         block: (IndexedNode) -> NodeActionResult,
     ): NodeActionResult {
         val validation = runOnMainSync { validateNode(snapshot, index) }
             ?: return NodeActionResult.failure("SERVICE_TIMEOUT", "无障碍服务主线程无响应")
         return when (validation) {
-            is NodeValidation.Invalid -> validation.result
             is NodeValidation.Valid -> block(validation.indexedNode)
+            is NodeValidation.Invalid -> {
+                val stale = snapshot.indexedNodes.firstOrNull { it.index == index }
+                    ?.takeIf { !it.bounds.isEmpty }
+                    ?.let { staleFallback(it) }
+                stale ?: validation.result
+            }
         }
     }
 
