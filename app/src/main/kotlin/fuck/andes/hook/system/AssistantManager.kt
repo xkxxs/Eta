@@ -127,21 +127,29 @@ internal object AssistantManager {
                     val phase = chain.getArg(0) as Int
                     val result = chain.proceed()
                     val service = chain.getThisObject()
+                    logger.info("[AssistantBoot] onBootPhase phase=$phase")
                     captureVoiceInteractionManagerStub(service)
                     captureSystemContext(service)
                     if (phase == BOOT_COMPLETED_PHASE) {
+                        logger.info("[AssistantBoot] BOOT_COMPLETED 到达")
                         val context = HookSupport.getFieldValue(service, "mContext") as? Context
                         if (context == null) {
                             logger.warnThrottled("assistant_boot_missing_context") {
                                 "AssistantManager: boot completed 时无法取得 mContext"
                             }
                         } else {
-                            schedulePreferenceSelection(
-                                context = context,
-                                logger = logger,
-                                userId = null,
-                                forceRefresh = false,
-                                rebuildWhenVerified = false,
+                            logger.info("[AssistantBoot] 调度 preference selection(延迟 20s)")
+                            systemHandler.postDelayed(
+                                {
+                                    schedulePreferenceSelection(
+                                        context = context,
+                                        logger = logger,
+                                        userId = null,
+                                        forceRefresh = false,
+                                        rebuildWhenVerified = false,
+                                    )
+                                },
+                                20_000L,
                             )
                         }
                     }
@@ -366,6 +374,7 @@ internal object AssistantManager {
         rebuildWhenVerified: Boolean,
     ): Boolean = handler.post {
         try {
+            logger.info("[AssistantBoot] 配置任务开始执行")
             // 请求入队后目标或开关可能变化，真正执行前必须重新读取 RemotePreferences。
             val target = Prefs.powerAssistantTarget()
             if (!shouldConfigureAssistant(
@@ -373,6 +382,7 @@ internal object AssistantManager {
                     target = target,
                 )
             ) {
+                logger.info("[AssistantBoot] 配置任务条件不满足，跳过")
                 return@post
             }
             val binding = assistantBindingFor(target) ?: return@post
@@ -403,7 +413,9 @@ internal object AssistantManager {
     ) {
         val target = Prefs.powerAssistantTarget()
         val autoConfigEnabled = Prefs.isEnabled(Prefs.Keys.ASSISTANT_AUTO_CONFIG)
-        when (assistantSelectionAction(autoConfigEnabled, target)) {
+        val action = assistantSelectionAction(autoConfigEnabled, target)
+        logger.info("[AssistantBoot] selection action=$action autoConfig=$autoConfigEnabled target=$target")
+        when (action) {
             AssistantSelectionAction.RESTORE_OEM -> scheduleOemAssistantRestoration(
                 context = context,
                 userId = userId,

@@ -10,10 +10,12 @@ import fuck.andes.core.safeLogType
 import android.content.Context
 import android.content.Intent
 import android.os.Handler
+import android.view.KeyEvent
 import android.os.Message
 import android.os.SystemClock
 import fuck.andes.config.PowerAssistantTarget
 import fuck.andes.config.Prefs
+import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 
 internal object PowerHooks {
@@ -36,9 +38,142 @@ internal object PowerHooks {
     ): HookInstallation {
         val hooks = HookRegistrar(module, rootLogger, "Power")
         return hooks.install {
+            hookPowerKeyAssistantEntry(hooks, classLoader)
             // 当前机型实测证明 OplusSpeechHandler 是必要路径，目标在热路径即时读取。
             hookOplusSpeechHandler(hooks, classLoader)
         }
+    }
+
+    private fun hookPowerKeyAssistantEntry(
+        hooks: HookRegistrar,
+        classLoader: ClassLoader
+    ) {
+        val logger = hooks.logger
+        val ext = HookSupport.findClassOrNull(classLoader, "com.android.server.policy.PhoneWindowManagerExtImpl")
+        val pwm = HookSupport.findClassOrNull(classLoader, "com.android.server.policy.PhoneWindowManager")
+        val entries = mutableListOf<Triple<String, String, java.lang.reflect.Method>>()
+        ext?.let { c ->
+            HookSupport.findMethod(c, "launchAssistGoogleSpeechAssistantAction", Message::class.java)?.let {
+                entries += Triple(
+                    "system.power-assist-entry.launch",
+                    "PhoneWindowManagerExtImpl.launchAssistGoogleSpeechAssistantAction(Message)",
+                    it
+                )
+            }
+            HookSupport.findMethod(c, "oplusInterceptLongPowerPress")?.let {
+                entries += Triple(
+                    "system.power-assist-entry.longpress",
+                    "PhoneWindowManagerExtImpl.oplusInterceptLongPowerPress()",
+                    it
+                )
+            }
+        }
+        pwm?.let { c ->
+            HookSupport.findMethod(
+                c, "launchAssistAction",
+                String::class.java, Int::class.javaPrimitiveType!!,
+                Long::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!
+            )?.let {
+                entries += Triple(
+                    "system.power-assist-entry.action",
+                    "PhoneWindowManager.launchAssistAction(String,int,long,int,int)",
+                    it
+                )
+            }
+        }
+        // 本机 ExtImpl 的语音助手消息可能由内部 Handler 类处理（mAsynHandler），逐一挂上 handleMessage。
+        ext?.declaredClasses?.forEach { inner ->
+            val handleMessage = HookSupport.findMethod(inner, "handleMessage", Message::class.java) ?: return@forEach
+            entries += Triple(
+                "system.power-assist-entry.inner",
+                "${inner.name}.handleMessage(Message)",
+                handleMessage
+            )
+        }
+        // Oplus 电源键处理扩展（长按判定/语音消息投递）逐一挂上，命中即接管。
+        ext?.let { c ->
+            val powerEntries: List<Pair<String, Array<Class<*>>>> = listOf(
+                "interceptPowerKeyDown" to emptyArray(),
+                "interceptPowerKeyUp" to emptyArray(),
+                "oplusInterceptPowerKeyDown" to arrayOf(KeyEvent::class.java, Boolean::class.javaPrimitiveType!!),
+                "oplusInterceptPowerKeyUp" to arrayOf(Boolean::class.javaPrimitiveType!!),
+                "oplusPowerPress" to arrayOf(Long::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!),
+                "enqueuePowerKeyDownEvent" to arrayOf(Long::class.javaPrimitiveType!!),
+                "handlePowerKeyDownEventForSosEarly" to arrayOf(Long::class.javaPrimitiveType!!),
+                "handlePowerKeyDownEventForSosLate" to arrayOf(Boolean::class.javaPrimitiveType!!),
+                "sendSpeechMessage" to arrayOf(java.lang.Long::class.java),
+                "startSpeech" to arrayOf(Int::class.javaPrimitiveType!!, java.lang.Long::class.java),
+                "startSpeech" to arrayOf(Int::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!, java.lang.Long::class.java),
+                "correctPowerKeyEventLocked" to arrayOf(Long::class.javaPrimitiveType!!),
+            )
+            powerEntries.forEach { (name, params) ->
+                val m = HookSupport.findMethod(c, name, *params) ?: return@forEach
+                entries += Triple("system.power-assist-entry.power", "$name(${params.joinToString(",") { it.simpleName }})", m)
+            }
+        }
+        if (entries.isEmpty()) {
+            hooks.missing(
+                id = "system.power-assist-entry",
+                description = "长按电源键→助手入口",
+                detail = "未找到任何可拦截的助手启动方法"
+            )
+            return
+        }
+        entries.forEach { (id, description, method) ->
+            hooks.intercept(id = id, executable = method, description = description) { chain ->
+                tryLaunchAssistantFromPowerEntry(chain, logger)
+            }
+        }
+    }
+
+    private fun tryLaunchAssistantFromPowerEntry(
+        chain: XposedInterface.Chain,
+        logger: ModuleLogger
+    ): Any? {
+        val target = Prefs.powerAssistantTarget()
+        val binding = assistantBindingFor(target)
+        if (binding == null) {
+            logger.info("[PowerKeyEntry] 无绑定目标 target=$target, 放行")
+            return chain.proceed()
+        }
+        val self = chain.getThisObject() ?: return chain.proceed()
+        val context = HookSupport.getFieldValue(self, "mContext") as? Context
+            ?: return chain.proceed()
+        if (!HookSupport.isPackageInstalled(context, binding.packageName)) {
+            logger.info("[PowerKeyEntry] ${binding.packageName} 未安装, 放行")
+            return chain.proceed()
+        }
+        logger.info("[PowerKeyEntry] 入口触发 target=$target, 尝试接管")
+        val now = SystemClock.uptimeMillis()
+        if (now - lastInterceptUptime <= ModuleConfig.INTERCEPT_DEDUP_WINDOW_MS) {
+            logger.debug { "电源键入口: 命中去重窗口，吞掉重复触发" }
+            return null
+        }
+        if (AssistantManager.showAssistantSession(
+                context = context,
+                target = target,
+                logger = logger,
+                source = "PowerKeyEntry",
+                logFailures = true
+            )
+        ) {
+            finalizeSuccessfulLaunch(logger, self, "PowerKeyEntry", now)
+            logger.info("[PowerKeyEntry] voiceinteraction 启动成功, 已吞掉本次触发")
+            return null
+        }
+        if (tryStartAssistantActivityFallback(
+                target = target,
+                binding = binding,
+                logger = logger,
+                phoneWindowManager = self,
+                source = "PowerKeyEntry"
+            )
+        ) {
+            logger.info("[PowerKeyEntry] Activity 兜底启动成功, 已吞掉本次触发")
+            return null
+        }
+        logger.info("[PowerKeyEntry] 启动失败, 放行原逻辑")
+        return chain.proceed()
     }
 
     private fun hookOplusSpeechHandler(

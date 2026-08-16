@@ -28,7 +28,7 @@ android {
 
     defaultConfig {
         applicationId = "fuck.andes"
-        minSdk = 34
+        minSdk = 33
         targetSdk = 36
         versionCode = 260
         versionName = "2.6.0"
