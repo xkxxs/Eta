@@ -74,6 +74,7 @@ import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.basic.ScrollBehavior
 import top.yukonga.miuix.kmp.basic.TabRow
@@ -592,6 +593,22 @@ private fun ProviderModelsTab(
     var selectionMode by remember(provider.id) { mutableStateOf(false) }
     var selectedModelIds by remember(provider.id) { mutableStateOf(setOf<String>()) }
     var showBatchDeleteDialog by remember { mutableStateOf(false) }
+    var modelQuery by remember(provider.id) { mutableStateOf("") }
+    val filteredModels = remember(provider.models, modelQuery) {
+        val query = modelQuery.trim().lowercase()
+        if (query.isEmpty()) {
+            provider.models.sortedBy { it.sortOrder }
+        } else {
+            provider.models.asSequence()
+                .filter { model ->
+                    model.id.lowercase().contains(query) ||
+                        model.modelId.lowercase().contains(query) ||
+                        model.displayName.lowercase().contains(query)
+                }
+                .sortedBy { it.sortOrder }
+                .toList()
+        }
+    }
 
     BackHandler(enabled = selectionMode) {
         selectionMode = false
@@ -684,9 +701,30 @@ private fun ProviderModelsTab(
                 }
             }
 
+            item(key = "models_search") {
+                if (provider.models.isNotEmpty()) {
+                    InputField(
+                        query = modelQuery,
+                        onQueryChange = { modelQuery = it },
+                        onSearch = {},
+                        expanded = false,
+                        onExpandedChange = {},
+                        label = "搜索模型",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .padding(top = 12.dp, bottom = 8.dp),
+                    )
+                }
+            }
+
             item(key = "models_list") {
                 ProviderSection(
-                    title = "模型列表 (共 ${provider.models.size} 个)",
+                    title = if (modelQuery.isBlank()) {
+                        "模型列表 (共 ${provider.models.size} 个)"
+                    } else {
+                        "模型列表 (匹配 ${filteredModels.size} / ${provider.models.size} 个)"
+                    },
                     modifier = Modifier.padding(bottom = 24.dp),
                 ) {
                     if (provider.models.isEmpty()) {
@@ -700,8 +738,19 @@ private fun ProviderModelsTab(
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                             )
                         }
+                    } else if (filteredModels.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "没有匹配「${modelQuery.trim()}」的模型",
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            )
+                        }
                     } else {
-                        provider.models.sortedBy { it.sortOrder }.forEachIndexed { index, model ->
+                        filteredModels.forEachIndexed { index, model ->
                             if (index > 0) {
                                 HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
                             }
@@ -757,13 +806,13 @@ private fun ProviderModelsTab(
         ) {
             ModelSelectionBar(
                 selectedCount = selectedModelIds.size,
-                totalCount = provider.models.size,
+                totalCount = filteredModels.size,
                 enabled = !isFetching && !isMutatingModel,
                 onToggleAll = {
-                    selectedModelIds = if (selectedModelIds.size == provider.models.size) {
+                    selectedModelIds = if (selectedModelIds.size == filteredModels.size) {
                         emptySet()
                     } else {
-                        provider.models.mapTo(mutableSetOf()) { it.id }
+                        filteredModels.mapTo(mutableSetOf()) { it.id }
                     }
                 },
                 onDelete = { showBatchDeleteDialog = true },
