@@ -46,6 +46,8 @@ internal object ModuleConfig {
     const val COLOR_DIRECT_DOUBLE_FINGER_COUNT = 2
     const val OP_LUS_ASSIST_MESSAGE_WHAT = 0x3F3
     const val INTERCEPT_DEDUP_WINDOW_MS = 1_000L
+    /** 电源键长按判定阈值(与系统 LONG_PRESS_POWER_ASSISTANT 一致) */
+    const val POWER_KEY_LONG_PRESS_DELAY_MS = 500L
 
     const val SPOOF_MANUFACTURER = "samsung"
     const val SPOOF_BRAND = "samsung"

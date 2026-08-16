@@ -25,6 +25,95 @@ internal object PowerHooks {
     @Volatile
     private var lastInterceptUptime = 0L
 
+    // ── 电源键长按判定:按键流方法只记录 down/up,长按成立后延迟启动助手 ──────
+    @Volatile
+    private var cachedPowerKeyContext: Context? = null
+
+    @Volatile
+    private var cachedPowerKeySelf: Any? = null
+
+    @Volatile
+    private var powerKeyDownUptime = 0L
+
+    @Volatile
+    private var powerKeyUpUptime = 0L
+
+    @Volatile
+    private var powerKeyCheckToken = 0L
+
+    private val powerKeyHandler: Handler by lazy {
+        Handler(android.os.HandlerThread("eta-power-key").apply { start() }.looper)
+    }
+
+    private fun notePowerKeyDown(logger: ModuleLogger) {
+        val now = SystemClock.uptimeMillis()
+        if (now - powerKeyDownUptime < 100L) return
+        powerKeyDownUptime = now
+        val token = ++powerKeyCheckToken
+        powerKeyHandler.postDelayed(
+            {
+                if (token != powerKeyCheckToken) return@postDelayed
+                if (powerKeyUpUptime > powerKeyDownUptime) return@postDelayed
+                launchAssistantFromKeyEvent(logger)
+            },
+            ModuleConfig.POWER_KEY_LONG_PRESS_DELAY_MS,
+        )
+    }
+
+    private fun notePowerKeyUp() {
+        powerKeyUpUptime = SystemClock.uptimeMillis()
+    }
+
+    /**
+     * 宽松长按判定:语音助手专用入口(系统判定长按后才调用)一般无需再判;
+     * 但部分方法可能在按键瞬间被调用,用参数携带的 downTime 兜底,
+     * 不足阈值(<400ms)直接放行,避免短按电源键误吞。
+     */
+    private fun isPowerKeyLongPressContext(chain: XposedInterface.Chain): Boolean {
+        var downTime: Long? = null
+        for (arg in chain.args) {
+            var candidate: Long? = null
+            if (arg is Long && arg > 1_000_000_000L) candidate = arg
+            else if (arg is KeyEvent) candidate = arg.downTime
+            if (candidate != null) {
+                downTime = minOf(downTime ?: Long.MAX_VALUE, candidate)
+            }
+        }
+        val down = downTime ?: return true
+        return SystemClock.uptimeMillis() - down >= ModuleConfig.POWER_KEY_LONG_PRESS_DELAY_MS - 100L
+    }
+
+    private fun launchAssistantFromKeyEvent(logger: ModuleLogger) {
+        val target = Prefs.powerAssistantTarget()
+        val binding = assistantBindingFor(target)
+        if (binding == null) return
+        val context = cachedPowerKeyContext ?: return
+        if (!HookSupport.isPackageInstalled(context, binding.packageName)) return
+        logger.info("[PowerKeyEntry] 长按判定成立(≥${ModuleConfig.POWER_KEY_LONG_PRESS_DELAY_MS}ms), 启动 ${binding.displayName}")
+        val now = SystemClock.uptimeMillis()
+        if (now - lastInterceptUptime <= ModuleConfig.INTERCEPT_DEDUP_WINDOW_MS) return
+        val fallbackSelf = cachedPowerKeySelf
+        val launched = AssistantManager.showAssistantSession(
+            context = context,
+            target = target,
+            logger = logger,
+            source = "PowerKeyEntry",
+            logFailures = true
+        ) || (
+            fallbackSelf != null && tryStartAssistantActivityFallback(
+                target = target,
+                binding = binding,
+                logger = logger,
+                phoneWindowManager = fallbackSelf,
+                source = "PowerKeyEntry"
+            )
+            )
+        if (launched) {
+            finalizeSuccessfulLaunch(logger, fallbackSelf ?: context, "PowerKeyEntry", now)
+            logger.info("[PowerKeyEntry] 长按启动成功")
+        }
+    }
+
     private enum class LaunchResult {
         LAUNCHED,
         ACTIVITY_FALLBACK_REQUIRED,
@@ -51,19 +140,44 @@ internal object PowerHooks {
         val logger = hooks.logger
         val ext = HookSupport.findClassOrNull(classLoader, "com.android.server.policy.PhoneWindowManagerExtImpl")
         val pwm = HookSupport.findClassOrNull(classLoader, "com.android.server.policy.PhoneWindowManager")
-        val entries = mutableListOf<Triple<String, String, java.lang.reflect.Method>>()
+        // ── 语音助手专用入口:系统判定长按后才调用,接管成功直接吞掉 ──────────
+        val assistEntries = mutableListOf<Triple<String, String, java.lang.reflect.Method>>()
         ext?.let { c ->
             HookSupport.findMethod(c, "launchAssistGoogleSpeechAssistantAction", Message::class.java)?.let {
-                entries += Triple(
+                assistEntries += Triple(
                     "system.power-assist-entry.launch",
                     "PhoneWindowManagerExtImpl.launchAssistGoogleSpeechAssistantAction(Message)",
                     it
                 )
             }
             HookSupport.findMethod(c, "oplusInterceptLongPowerPress")?.let {
-                entries += Triple(
+                assistEntries += Triple(
                     "system.power-assist-entry.longpress",
                     "PhoneWindowManagerExtImpl.oplusInterceptLongPowerPress()",
+                    it
+                )
+            }
+            HookSupport.findMethod(c, "sendSpeechMessage", java.lang.Long::class.java)?.let {
+                assistEntries += Triple(
+                    "system.power-assist-entry.speech-message",
+                    "PhoneWindowManagerExtImpl.sendSpeechMessage(Long)",
+                    it
+                )
+            }
+            HookSupport.findMethod(c, "startSpeech", Int::class.javaPrimitiveType!!, java.lang.Long::class.java)?.let {
+                assistEntries += Triple(
+                    "system.power-assist-entry.speech-start",
+                    "PhoneWindowManagerExtImpl.startSpeech(int,Long)",
+                    it
+                )
+            }
+            HookSupport.findMethod(
+                c, "startSpeech",
+                Int::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!, java.lang.Long::class.java
+            )?.let {
+                assistEntries += Triple(
+                    "system.power-assist-entry.speech-start2",
+                    "PhoneWindowManagerExtImpl.startSpeech(int,boolean,Long)",
                     it
                 )
             }
@@ -74,7 +188,7 @@ internal object PowerHooks {
                 String::class.java, Int::class.javaPrimitiveType!!,
                 Long::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!
             )?.let {
-                entries += Triple(
+                assistEntries += Triple(
                     "system.power-assist-entry.action",
                     "PhoneWindowManager.launchAssistAction(String,int,long,int,int)",
                     it
@@ -84,44 +198,61 @@ internal object PowerHooks {
         // 本机 ExtImpl 的语音助手消息可能由内部 Handler 类处理（mAsynHandler），逐一挂上 handleMessage。
         ext?.declaredClasses?.forEach { inner ->
             val handleMessage = HookSupport.findMethod(inner, "handleMessage", Message::class.java) ?: return@forEach
-            entries += Triple(
+            assistEntries += Triple(
                 "system.power-assist-entry.inner",
                 "${inner.name}.handleMessage(Message)",
                 handleMessage
             )
         }
-        // Oplus 电源键处理扩展（长按判定/语音消息投递）逐一挂上，命中即接管。
-        ext?.let { c ->
-            val powerEntries: List<Pair<String, Array<Class<*>>>> = listOf(
-                "interceptPowerKeyDown" to emptyArray(),
-                "interceptPowerKeyUp" to emptyArray(),
-                "oplusInterceptPowerKeyDown" to arrayOf(KeyEvent::class.java, Boolean::class.javaPrimitiveType!!),
-                "oplusInterceptPowerKeyUp" to arrayOf(Boolean::class.javaPrimitiveType!!),
-                "oplusPowerPress" to arrayOf(Long::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!),
-                "enqueuePowerKeyDownEvent" to arrayOf(Long::class.javaPrimitiveType!!),
-                "handlePowerKeyDownEventForSosEarly" to arrayOf(Long::class.javaPrimitiveType!!),
-                "handlePowerKeyDownEventForSosLate" to arrayOf(Boolean::class.javaPrimitiveType!!),
-                "sendSpeechMessage" to arrayOf(java.lang.Long::class.java),
-                "startSpeech" to arrayOf(Int::class.javaPrimitiveType!!, java.lang.Long::class.java),
-                "startSpeech" to arrayOf(Int::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!, java.lang.Long::class.java),
-                "correctPowerKeyEventLocked" to arrayOf(Long::class.javaPrimitiveType!!),
-            )
-            powerEntries.forEach { (name, params) ->
-                val m = HookSupport.findMethod(c, name, *params) ?: return@forEach
-                entries += Triple("system.power-assist-entry.power", "$name(${params.joinToString(",") { it.simpleName }})", m)
+        if (assistEntries.isNotEmpty()) {
+            assistEntries.forEach { (id, description, method) ->
+                hooks.intercept(id = id, executable = method, description = description) { chain ->
+                    if (!isPowerKeyLongPressContext(chain)) {
+                        return@intercept chain.proceed()
+                    }
+                    tryLaunchAssistantFromPowerEntry(chain, logger)
+                }
             }
-        }
-        if (entries.isEmpty()) {
+        } else {
             hooks.missing(
                 id = "system.power-assist-entry",
                 description = "长按电源键→助手入口",
                 detail = "未找到任何可拦截的助手启动方法"
             )
-            return
         }
-        entries.forEach { (id, description, method) ->
-            hooks.intercept(id = id, executable = method, description = description) { chain ->
-                tryLaunchAssistantFromPowerEntry(chain, logger)
+        // ── 电源键事件流方法:每次按键都调用,只做长按判定,永不吞返回值 ──────
+        // 短按(<500ms)放行;长按成立后启动 Eta,但系统原逻辑(3 秒关机菜单等)完整保留。
+        val keyEventMethods: List<Pair<String, Array<Class<*>>>> = listOf(
+            "interceptPowerKeyDown" to emptyArray(),
+            "interceptPowerKeyUp" to emptyArray(),
+            "oplusInterceptPowerKeyDown" to arrayOf(KeyEvent::class.java, Boolean::class.javaPrimitiveType!!),
+            "oplusInterceptPowerKeyUp" to arrayOf(Boolean::class.javaPrimitiveType!!),
+            "oplusPowerPress" to arrayOf(Long::class.javaPrimitiveType!!, Boolean::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!),
+            "enqueuePowerKeyDownEvent" to arrayOf(Long::class.javaPrimitiveType!!),
+            "correctPowerKeyEventLocked" to arrayOf(Long::class.javaPrimitiveType!!),
+        )
+        ext?.let { c ->
+            keyEventMethods.forEach { (name, params) ->
+                val m = HookSupport.findMethod(c, name, *params) ?: return@forEach
+                val isDown = !name.endsWith("Up") && name != "correctPowerKeyEventLocked"
+                hooks.intercept(
+                    id = "system.power-assist-entry.power.$name",
+                    executable = m,
+                    description = "PhoneWindowManagerExtImpl.$name(${params.joinToString(",") { it.simpleName }})"
+                ) { chain ->
+                    val self = chain.getThisObject()
+                    val context = HookSupport.getFieldValue(self, "mContext") as? Context
+                    if (context != null) {
+                        cachedPowerKeyContext = context
+                        cachedPowerKeySelf = self
+                    }
+                    if (isDown) {
+                        notePowerKeyDown(logger)
+                    } else {
+                        notePowerKeyUp()
+                    }
+                    chain.proceed()
+                }
             }
         }
     }
