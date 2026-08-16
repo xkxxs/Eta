@@ -102,6 +102,9 @@ class AgentAccessibilityService : AccessibilityService() {
                 signalWindowChanged()
             }
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                // 跳过豆包输入法的滚动事件记录(含跨进程 getSource):
+                // 豆包 ANR/大 GC 时主线程 binder 会被同步拖住导致打字卡顿。
+                if (DOUBAO_IME_PACKAGE == event.packageName?.toString()) return
                 bumpWindowContentGeneration(event.windowId)
                 recordScrollEvent(event)
             }
@@ -2223,6 +2226,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val DOUBAO_IME_PACKAGE = "com.bytedance.android.doubaoime"
         private const val CLIP_LABEL = "fuck_andes_agent"
         private const val WINDOW_POLL_FALLBACK_MS = 80L
         private const val MAX_UI_TREE_DEPTH = 24
